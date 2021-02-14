@@ -20,29 +20,29 @@ import json
 import os
 import traceback
 import sys
+import time
+
+count = 0
 
 
 def lambda_handler(event, context):
-    try:
-        logging.debug(event)
+    logging.debug(event)
+    global count
+    count += 1
+    if count % 250 == 0:
+        logging.info(f"I'm old and tired! {count}")
+        time.sleep(2)
 
-        result = {
-            'statusCode': '200',
-            'body': {'message': 'success'}
-        }
-        return json.dumps(result)
-    except Exception as error:
-        logging.error('lambda_handler error: %s' % error)
-        logging.error('lambda_handler trace: %s' % traceback.format_exc())
-        result = {
-            'statusCode': '500',
-            'body': {'message': 'error'}
-        }
-        return json.dumps(result)
+    result = {
+        'statusCode': '200',
+        'body': {'message': 'success'}
+    }
+    return json.dumps(result)
 
 
 def init_logger():
     global log_level
+
     log_level = str(os.environ.get('LOG_LEVEL')).upper()
     if log_level not in [
         'DEBUG', 'INFO',

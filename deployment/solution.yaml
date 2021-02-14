@@ -1,0 +1,295 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: lambda-sqs-test - Testing lambda sqs throttlin behavior
+
+Parameters:
+
+  Default:
+    Description: Default parameter
+    Type: String
+    Default: Default
+
+Mappings:
+
+  MetricsMap:
+    Send-Data:
+      SendAnonymousData: "Yes" # change to 'No' if needed
+
+  SourceCode:
+    General:
+      S3Bucket: %%BUCKET_NAME%%
+      KeyPrefix: "%%SOLUTION_NAME%%/%%VERSION%%"
+
+Resources:
+  DLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lambda_sqs_test_dlq
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: lambda_sqs_test_queue
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DLQ.Arn
+        maxReceiveCount: 10
+      VisibilityTimeout: 180
+  Trigger:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      EventSourceArn: !Sub 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:lambda_sqs_test_queue'
+      FunctionName: !Ref SQSConsumerFunction
+  SQSProducerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: !Sub SQSProducerFunctionRole-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt Queue.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt DLQ.Arn
+  SQSConsumerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/CloudWatchLambdaInsightsExecutionRolePolicy'
+      Policies:
+        - PolicyName: !Sub SQSConsumerFunctionRole-Policy-${AWS::StackName}-${AWS::Region}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueUrl
+                Resource: !GetAtt Queue.Arn
+
+  SQSProducerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Place holder for lambda function
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+          QUEUE_URL: !Ref Queue
+      Handler: lambda_sqs_producer.index.lambda_handler
+      Role: !GetAtt SQSProducerFunctionRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%ZIP_FILE_NAME%%"]]
+      Runtime: python3.8
+      MemorySize: 512
+      Layers:
+        - !Ref DefaultLayer
+      Timeout: 30
+  SQSConsumerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Place holder for lambda function
+      Environment:
+        Variables:
+          LOG_LEVEL: 'DEBUG' # change to WARN, ERROR or DEBUG as needed
+      Handler: lambda_sqs_consumer.index.lambda_handler
+      Role: !GetAtt SQSConsumerFunctionRole.Arn
+      Code:
+        S3Bucket: !FindInMap [ "SourceCode", "General", "S3Bucket" ]
+        S3Key: !Join [ "/", [ !FindInMap [ "SourceCode", "General", "KeyPrefix" ],  "%%ZIP_FILE_NAME%%" ] ]
+      Runtime: python3.8
+      MemorySize: 128
+      ReservedConcurrentExecutions: 1
+      Layers:
+        - !Ref DefaultLayer
+        - !Sub "arn:aws:lambda:${AWS::Region}:580247275435:layer:LambdaInsightsExtension:14"
+      Timeout: 30
+
+  DefaultLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.8
+      Content:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join ["/", [!FindInMap ["SourceCode", "General", "KeyPrefix"],  "%%LAYER_FILE_NAME%%"]]
+      Description: Layer for lambda-sqs-test
+      LayerName: lambda-sqs-test-layer
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: SQS-Lambda-Reserved-Concrurency-Test
+      DashboardBody: !Sub |
+          {
+              "widgets": [
+                  {
+                      "type": "metric",
+                      "x": 8,
+                      "y": 12,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "view": "timeSeries",
+                          "stacked": false,
+                          "metrics": [
+                              [ "AWS/SQS", "ApproximateAgeOfOldestMessage", "QueueName", "${Queue.QueueName}", { "stat": "Maximum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Queue Approximate Age Of Oldest Message",
+                          "period": 60
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 0,
+                      "y": 12,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "view": "timeSeries",
+                          "stacked": false,
+                          "metrics": [
+                              [ "AWS/SQS", "NumberOfMessagesReceived", "QueueName", "${Queue.QueueName}", { "stat": "Sum" } ],
+                              [ "...", "${DLQ.QueueName}", { "stat": "Sum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Queue Number Of Messages Received",
+                          "period": 60
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 16,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "view": "timeSeries",
+                          "stacked": false,
+                          "metrics": [
+                              [ "AWS/SQS", "NumberOfMessagesSent", "QueueName", "${Queue.QueueName}", { "stat": "Sum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Queue Number Of Messages Sent",
+                          "period": 60
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 0,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "period": 60,
+                          "metrics": [
+                              [ "AWS/Lambda", "Invocations", "FunctionName", "${SQSConsumerFunction}", "Resource", "${SQSConsumerFunction}", { "stat": "Sum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Lambda Consumer Invocations"
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 8,
+                      "y": 6,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "period": 60,
+                          "metrics": [
+                              [ "AWS/Lambda", "Duration", "FunctionName", "${SQSConsumerFunction}", "Resource", "${SQSConsumerFunction}", { "stat": "Minimum" } ],
+                              [ "...", { "stat": "Average" } ],
+                              [ "...", { "stat": "Maximum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Lambda Consumer Duration"
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "period": 60,
+                          "metrics": [
+                              [ "AWS/Lambda", "Errors", "FunctionName", "${SQSConsumerFunction}", "Resource", "${SQSConsumerFunction}", { "id": "errors", "stat": "Sum", "color": "#d13212" } ],
+                              [ ".", "Invocations", ".", ".", ".", ".", { "id": "invocations", "stat": "Sum", "visible": false } ],
+                              [ { "expression": "100 - 100 * errors / MAX([errors, invocations])", "label": "Success rate (%)", "id": "availability", "yAxis": "right" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Lambda Consumer Error count and success rate (%)",
+                          "yAxis": {
+                              "right": {
+                                  "max": 100
+                              }
+                          }
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "period": 60,
+                          "metrics": [
+                              [ "AWS/Lambda", "Throttles", "FunctionName", "${SQSConsumerFunction}", "Resource", "${SQSConsumerFunction}", { "stat": "Sum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Lambda Consumer Throttles"
+                      }
+                  },
+                  {
+                      "type": "metric",
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 6,
+                      "properties": {
+                          "period": 60,
+                          "metrics": [
+                              [ "AWS/Lambda", "ConcurrentExecutions", "FunctionName", "${SQSConsumerFunction}", "Resource", "${SQSConsumerFunction}", { "stat": "Maximum" } ]
+                          ],
+                          "region": "${AWS::Region}",
+                          "title": "Lambda Consumer Concurrent executions"
+                      }
+                  }
+              ]
+          }
