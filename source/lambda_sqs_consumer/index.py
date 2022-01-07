@@ -28,10 +28,12 @@ count = 0
 def lambda_handler(event, context):
     logging.debug(event)
     global count
-    count += 1
-    if count % 250 == 0:
-        logging.info(f"I'm old and tired! {count}")
-        time.sleep(2)
+
+    records = event["Records"]
+    for record in records:
+        count += 1
+        logging.info(f"I'm old and tired! {count}: ${record} ")
+        time.sleep(1)
 
     result = {
         'statusCode': '200',

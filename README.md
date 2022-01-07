@@ -45,7 +45,7 @@ The producer lambda can be run from the console with a test payload. The functio
 When invoked the function will attempt to send as many messages with a random string payload as possible in batches of 10 before timing out.
 
 ### Consumer function
-THe consumer function which is configured to run with a reserved concurrency of one does nothing but print the received message. It also will sleep for two seconds every 250 messages received per function instance.
+THe consumer function which is configured to run with a reserved concurrency of one does nothing but print the received message. It also will sleep for one second every message received per function instance.
 
 ### Dashboard
 The stack also creates a dashboard to monitor the rate at which the consumer processes messages
